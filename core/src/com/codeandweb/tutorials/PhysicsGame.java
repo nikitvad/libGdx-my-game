@@ -2,347 +2,577 @@ package com.codeandweb.tutorials;
 
 import com.badlogic.gdx.ApplicationAdapter;
 import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
+import com.badlogic.gdx.InputAdapter;
 import com.badlogic.gdx.graphics.GL20;
 import com.badlogic.gdx.graphics.OrthographicCamera;
 import com.badlogic.gdx.graphics.g2d.Sprite;
 import com.badlogic.gdx.graphics.g2d.SpriteBatch;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas;
 import com.badlogic.gdx.graphics.g2d.TextureAtlas.AtlasRegion;
+import com.badlogic.gdx.math.Circle;
+import com.badlogic.gdx.math.MathUtils;
 import com.badlogic.gdx.math.Vector2;
+import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.physics.box2d.Body;
 import com.badlogic.gdx.physics.box2d.BodyDef;
 import com.badlogic.gdx.physics.box2d.Box2D;
 import com.badlogic.gdx.physics.box2d.Box2DDebugRenderer;
+import com.badlogic.gdx.physics.box2d.Contact;
+import com.badlogic.gdx.physics.box2d.ContactImpulse;
+import com.badlogic.gdx.physics.box2d.ContactListener;
+import com.badlogic.gdx.physics.box2d.EdgeShape;
+import com.badlogic.gdx.physics.box2d.Fixture;
 import com.badlogic.gdx.physics.box2d.FixtureDef;
+import com.badlogic.gdx.physics.box2d.Manifold;
 import com.badlogic.gdx.physics.box2d.PolygonShape;
 import com.badlogic.gdx.physics.box2d.World;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.viewport.ExtendViewport;
 import com.codeandweb.physicseditor.PhysicsShapeCache;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Random;
+import java.util.concurrent.TimeUnit;
 
 public class PhysicsGame extends ApplicationAdapter {
-  /**
-   * This affects the speed of our simulation, and how gravity behaves. This is
-   * set to our game's expected FPS rate for optimal performance for what we're
-   * doing in this tutorial. If you were simulating something that required
-   * greater precision, such as planets orbiting a star, you would want to set
-   * this to as high as double the frame rate, or 1/120.
-   * <p/>
-   * Setting it to a higher rate will result in a smoother, but slower
-   * simulation. Setting it to a lower value will result in a choppy frame
-   * rate, but increase the amount of polygons the simulation can process.
-   */
-  static final float STEP_TIME = 1f / 60f;
 
-  /**
-   * Velocity iterations will improve the stability of the physics simulation.
-   * A higher value will provide greater precision for collision detection, at
-   * the cost of consuming more of the CPU.
-   */
-  static final int VELOCITY_ITERATIONS = 6;
+    static final float STEP_TIME = 1f / 60f;
 
-  /**
-   * This affects the way bodies react to collisions. A higher value improves
-   * the simulations overlap resolution.
-   * <p/>
-   * I recommend reading this article on the anatomy of a collision for a
-   * clearer understanding of both velocity and position iterations:
-   * http://www.iforce2d.net/b2dtut/collision-anatomy
-   */
-  static final int POSITION_ITERATIONS = 2;
+    static final int VELOCITY_ITERATIONS = 6;
 
-  /**
-   * This is a scalar used to make our sprites fit within the physics
-   * simulation. Without it the sprites would be too big to be drawn on the
-   * screen.
-   */
-  static final float SCALE = 0.05f;
+    static final int POSITION_ITERATIONS = 2;
 
-  /**
-   * Adjust this value to change the amount of fruit that falls from the sky.
-   */
-  static final int COUNT = 25;
+    static final float SCALE = 0.05f;
 
-  /**
-   * Used to convert our sprite sheet found at android/assets/sprites.png and
-   * described in android/assets/sprites.txt into {@link Sprite} objects.
-   */
-  TextureAtlas textureAtlas;
 
-  /**
-   * Used to draw the sprites to the screen.
-   */
-  SpriteBatch batch;
+    static final int COUNT = 10;
+    static final String TAG = "TOUCH";
+    private static final String OBJECT_TYPE_BULLET = "banana_bullet";
 
-  /**
-   * Used to cache our sprites so we only have to load them in when the game
-   * first starts. For a production-worthy game I would recommend using a
-   * {@link com.badlogic.gdx.assets.AssetManager} instead of this.
-   */
-  final HashMap<String, Sprite> sprites = new HashMap<String, Sprite>();
+    final HashMap<String, Sprite> sprites = new HashMap<String, Sprite>();
 
-  /**
-   * A 2D camera. This is required for scaling our sprites. It is managed by
-   * {@link #viewport}.
-   */
-  OrthographicCamera camera;
+    TextureAtlas textureAtlas;
+    SpriteBatch batch;
+    OrthographicCamera camera;
+    ExtendViewport viewport;
+    World world;
+    PhysicsShapeCache physicsBodies;
+    float accumulator = 0;
+    Body ground;
 
-  /**
-   * Provides scaling while maintaining an aspect ratio when the screen is
-   * resized.
-   */
-  ExtendViewport viewport;
+    ArrayList<Body> fruitBodies = new ArrayList<Body>();
+    ArrayList<Sprite> fruitSprites = new ArrayList<Sprite>();
 
-  /**
-   * Our Box2D physics world.
-   */
-  World world;
+    Vector2 gravity = new Vector2(0, -4);
+    Sprite fireZoneSprite;
+    Circle fireZone;
+    ArrayList<Body> objectsToRemove = new ArrayList<Body>();
+    Thread thread;
+    private Body ship;
+    private float screenWidth = 100;
+    private float screenHeight = 100;
+    private float prevX = 0;
+    private float prevY = 0;
+    private Circle touchZone = new Circle(0, 0, 5);
+    private int firePointer = -1;
+    private int motionPointer = -1;
+    private List<Body> bananaBullets = new ArrayList<Body>();
+    private String OBJECT_TYPE_FRUIT = "fruit";
 
-  /**
-   * Used to draw the collision polygons to the screen for debugging purposes.
-   * This is disabled by default, but can be enabled by uncommenting a line in
-   * {@link #render()}.
-   */
-  Box2DDebugRenderer debugRenderer;
+    @Override
+    public void create() {
+        Box2D.init();
 
-  /**
-   * Parses XML data exported from PhysicsEditor into Box2D bodies.
-   */
-  PhysicsShapeCache physicsBodies;
+        batch = new SpriteBatch();
 
-  /**
-   * Used to fix our physics step time. You can read more on what that means in
-   * this article: http://gafferongames.com/game-physics/fix-your-timestep/
-   */
-  float accumulator = 0;
+        camera = new OrthographicCamera();
 
-  /**
-   * A physics body for the ground. This is a static body that does not move.
-   * It spans the width of our game's screen, and is 1 unit tall.
-   */
-  Body ground;
+        viewport = new ExtendViewport(50, 50, camera);
 
-  /**
-   * Stores the physics bodies of the fruits that fall from the sky.
-   */
-  Body[] fruitBodies = new Body[COUNT];
+        textureAtlas = new TextureAtlas("sprites.txt");
 
-  /**
-   * Stores pointers to the sprites contained in {@link #sprites} that match
-   * the bodies in {@link #fruitBodies}.
-   */
-  Sprite[] fruitSprites = new Sprite[COUNT];
+        loadSprites();
+        createFireZone();
 
-  @Override
-  public void create() {
-    Box2D.init();
+        world = new World(new Vector2(0, -10), true);
 
-    batch = new SpriteBatch();
+        world.setContactListener(new ContactListener() {
+            @Override
+            public void beginContact(Contact contact) {
+                Body bodyA = contact.getFixtureA().getBody();
+                Body bodyB = contact.getFixtureB().getBody();
 
-    camera = new OrthographicCamera();
+                if (bodyA == ship || bodyB == ship) {
 
-    viewport = new ExtendViewport(50, 50, camera);
+                    if (bodyB == ship) {
+                        Body temp = bodyA;
+                        bodyA = bodyB;
+                        bodyB = temp;
+                    }
+                    Vector2 impulse = bodyA.getWorldCenter();
+                    impulse.x = (bodyB.getWorldCenter().x - impulse.x) * 100;
+                    impulse.y = (bodyB.getWorldCenter().y - impulse.y) * 100;
+                    Gdx.app.log("asdf", impulse.toString());
 
-    textureAtlas = new TextureAtlas("sprites.txt");
 
-    loadSprites();
+                    bodyB.applyLinearImpulse(impulse, bodyB.getWorldCenter(), true);
+                } else if (bodyA.getUserData() != null && bodyB.getUserData() != null && !bodyA.getUserData().equals(bodyB.getUserData())) {
 
-    world = new World(new Vector2(0, -120), true);
+                    if (bodyA.getUserData().equals(OBJECT_TYPE_BULLET)) {
+                        removeBullets(bodyA);
+                    } else if (bodyA.getUserData().equals(OBJECT_TYPE_FRUIT)) {
+                        removeFruit(bodyA);
+                    }
 
-    physicsBodies = new PhysicsShapeCache("physics.xml");
+                    if (bodyB.getUserData().equals(OBJECT_TYPE_BULLET)) {
+                        removeBullets(bodyB);
+                    } else if (bodyB.getUserData().equals(OBJECT_TYPE_FRUIT)) {
+                        removeFruit(bodyB);
+                    }
 
-    debugRenderer = new Box2DDebugRenderer();
+                }
+            }
 
-    generateFruit();
-  }
+            @Override
+            public void endContact(Contact contact) {
 
-  /**
-   * Loads the sprites and caches them into {@link #sprites}.
-   */
-  private void loadSprites() {
-    Array<AtlasRegion> regions = textureAtlas.getRegions();
+            }
 
-    for (AtlasRegion region : regions) {
-      Sprite sprite = textureAtlas.createSprite(region.name);
+            @Override
+            public void preSolve(Contact contact, Manifold oldManifold) {
 
-      float width = sprite.getWidth() * SCALE;
-      float height = sprite.getHeight() * SCALE;
+            }
 
-      sprite.setSize(width, height);
-      sprite.setOrigin(0, 0);
+            @Override
+            public void postSolve(Contact contact, ContactImpulse impulse) {
 
-      sprites.put(region.name, sprite);
-    }
-  }
+            }
+        });
 
-  /**
-   * Populates {@link #fruitBodies} and {@link #fruitSprites}.
-   */
-  private void generateFruit() {
-    String[] fruitNames = new String[]{"banana", "cherries", "orange"};
+        physicsBodies = new PhysicsShapeCache("physics.xml");
 
-    Random random = new Random();
 
-    for (int i = 0; i < fruitBodies.length; i++) {
-      String name = fruitNames[random.nextInt(fruitNames.length)];
+        createShip();
 
-      fruitSprites[i] = sprites.get(name);
+        Gdx.input.setInputProcessor(new InputAdapter() {
+            @Override
+            public boolean touchDown(int screenX, int screenY, int pointer, int button) {
 
-      float x = random.nextFloat() * 50;
-      float y = random.nextFloat() * 50 + 50;
+                Vector3 touchPos = new Vector3(screenX, screenY, 0);
+                Vector3 worldPos = camera.unproject(touchPos);
 
-      fruitBodies[i] = createBody(name, x, y, 0);
-    }
-  }
+                touchZone.x = worldPos.x;
+                touchZone.y = worldPos.y;
 
-  /**
-   * Uses {@link ShapeCache} to parse a body described in android/assets/physics.xml
-   * into a Box2D {@link Body}.
-   *
-   * @param name     The name of the body exactly as it appears in the XML.
-   * @param x        The body's initial X position in meters.
-   * @param y        The body's initial Y position in meters.
-   * @param rotation The body's initial rotation in radians.
-   * @return A Box2D {@link Body}.
-   */
-  private Body createBody(String name, float x, float y, float rotation) {
-    Body body = physicsBodies.createBody(name, world, SCALE, SCALE);
-    body.setTransform(x, y, rotation);
+//                Gdx.app.log(TAG, "touchDown " + fireZone.overlaps(touchZone));
 
-    return body;
-  }
+                if (fireZone.overlaps(touchZone)) {
+                    firePointer = pointer;
+                    fireTrigger();
+                } else {
+                    if (motionPointer < 0) {
+                        motionPointer = pointer;
+                    }
+                    prevX = screenX;
+                    prevY = screenY;
+                }
+                return super.touchDown(screenX, screenY, pointer, button);
+            }
 
-  /**
-   * This is called when the application is resized, and can happen at any
-   * time, but will never be called before {@link #create()}.
-   *
-   * @param width  The screen's new width in pixels.
-   * @param height The screen's new height in pixels.
-   */
-  @Override
-  public void resize(int width, int height) {
-    viewport.update(width, height, true);
+            @Override
+            public boolean touchUp(int screenX, int screenY, int pointer, int button) {
+                if (pointer == firePointer) {
 
-    batch.setProjectionMatrix(camera.combined);
+                    firePointer = -1;
+                }
 
-    createGround();
-  }
+                if (pointer == motionPointer) {
+                    motionPointer = -1;
+                }
 
-  /**
-   * Creates the static ground {@link Body}. Without this the fruit would
-   * continue to fall indefinitely.
-   */
-  private void createGround() {
-    if (ground != null) world.destroyBody(ground);
+                Gdx.app.log(TAG, "touchUp " + screenX + " " + screenY + " " + pointer + " " + button);
+                return super.touchUp(screenX, screenY, pointer, button);
 
-    BodyDef bodyDef = new BodyDef();
+            }
 
-    bodyDef.type = BodyDef.BodyType.StaticBody;
+            @Override
+            public boolean touchDragged(int screenX, int screenY, int pointer) {
 
-    FixtureDef fixtureDef = new FixtureDef();
-    fixtureDef.friction = 1;
+                if (pointer == motionPointer) {
+                    float dX = (screenX - prevX);
+                    float dY = (screenY - prevY);
 
-    PolygonShape shape = new PolygonShape();
+                    Vector2 vector2 = ship.getPosition();
 
-    shape.setAsBox(camera.viewportWidth, 1);
+                    float newXPos = vector2.x + (dX / screenWidth) * camera.viewportWidth;
+                    float newYPos = vector2.y + (-dY / screenHeight) * camera.viewportHeight;
 
-    fixtureDef.shape = shape;
+                    if (newXPos > camera.viewportWidth) {
+                        newXPos = camera.viewportWidth;
+                    }
 
-    ground = world.createBody(bodyDef);
-    ground.createFixture(fixtureDef);
+                    if (newXPos < 0) {
+                        newXPos = 0;
+                    }
 
-    ground.setTransform(0, 0, 0);
+                    if (newYPos > camera.viewportHeight) {
+                        newYPos = camera.viewportHeight;
+                    }
 
-    shape.dispose();
-  }
+                    if (newYPos < 0) {
+                        newYPos = 0;
+                    }
 
-  /**
-   * Called once per frame to render the game. You can use
-   * {@code Gdx.graphics.getDeltaTime()} to find out how much time in seconds
-   * has passed between the current and last frame.
-   */
-  @Override
-  public void render() {
-    // Clear the screen using a sky-blue background.
-    Gdx.gl.glClearColor(0.57f, 0.77f, 0.85f, 1);
-    Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+                    Gdx.app.log(TAG, "touchDragged " + newXPos + " " + newXPos + " " + pointer);
 
-    // Step the physics world.
-    stepWorld();
+                    vector2.x = newXPos;
+                    vector2.y = newYPos;
 
-    // open the sprite batch buffer for drawing
-    batch.begin();
+                    prevY = screenY;
+                    prevX = screenX;
 
-    // iterate through each of the fruits
-    for (int i = 0; i < fruitBodies.length; i++) {
 
-      // get the physics body of the fruit
-      Body body = fruitBodies[i];
+                    ship.setTransform(vector2, 0);
 
-      // get the position of the fruit from Box2D
-      Vector2 position = body.getPosition();
+                    Gdx.app.log(TAG, "touchDragged " + screenX + " " + screenY + " " + pointer);
+                }
+                return super.touchDragged(screenX, screenY, pointer);
+            }
+        });
 
-      // get the degrees of rotation by converting from radians
-      float degrees = (float) Math.toDegrees(body.getAngle());
-
-      // draw the fruit on the screen
-      drawSprite(fruitSprites[i], position.x, position.y, degrees);
     }
 
-    // close the buffer - this is what actually draws the sprites
-    batch.end();
+    private void createFireZone() {
+        fireZoneSprite = textureAtlas.createSprite("orange");
 
-    // uncomment to show the physics polygons
-    // debugRenderer.render(world, camera.combined);
-  }
+        float width = fireZoneSprite.getWidth() * SCALE * 2;
+        float height = fireZoneSprite.getHeight() * SCALE * 2;
+        fireZoneSprite.setOrigin(0, 0);
+        fireZoneSprite.setAlpha(0.6f);
+        fireZoneSprite.setSize(width, height);
 
-  /**
-   * Steps the physics simulation. This is called every render frame.
-   */
-  private void stepWorld() {
-    float delta = Gdx.graphics.getDeltaTime();
+        fireZone = new Circle();
+        fireZone.setRadius(width / 2);
+        fireZone.setPosition(0, 0);
 
-    accumulator += Math.min(delta, 0.25f);
-
-    if (accumulator >= STEP_TIME) {
-      accumulator -= STEP_TIME;
-
-      world.step(STEP_TIME, VELOCITY_ITERATIONS, POSITION_ITERATIONS);
     }
-  }
 
-  /**
-   * Sets the position and rotation of a sprite, and draws it to the supplied
-   * {@link SpriteBatch}.
-   *
-   * @param sprite  The sprite to draw.
-   * @param x       X position in meters.
-   * @param y       Y position in meters.
-   * @param degrees Degrees to rotate the sprite.
-   */
-  private void drawSprite(Sprite sprite, float x, float y, float degrees) {
-    sprite.setPosition(x, y);
+    private void createShip() {
+        BodyDef bodyDef = new BodyDef();
+        bodyDef.type = BodyDef.BodyType.StaticBody;
 
-    sprite.setRotation(degrees);
 
-    sprite.draw(batch);
-  }
+        ship = physicsBodies.createBody("cherries", world, bodyDef, SCALE, SCALE);
+        ship.setTransform(20, 20, 0);
+    }
 
-  /**
-   * Frees up all the game's resources. This is called when the game closes.
-   */
-  @Override
-  public void dispose() {
-    textureAtlas.dispose();
+    /**
+     * Loads the sprites and caches them into {@link #sprites}.
+     */
+    private void loadSprites() {
+        Array<AtlasRegion> regions = textureAtlas.getRegions();
 
-    sprites.clear();
+        for (AtlasRegion region : regions) {
+            Sprite sprite = textureAtlas.createSprite(region.name);
 
-    world.dispose();
+            float width = sprite.getWidth() * SCALE;
+            float height = sprite.getHeight() * SCALE;
 
-    debugRenderer.dispose();
-  }
+            sprite.setSize(width, height);
+            sprite.setOrigin(0, 0);
+
+            sprites.put(region.name, sprite);
+        }
+    }
+
+    private void generateFruit() {
+        final String[] fruitNames = new String[]{"orange"};
+
+        final Random random = new Random();
+
+        for (int i = 0; i < COUNT; i++) {
+            String name = fruitNames[random.nextInt(fruitNames.length)];
+
+            fruitSprites.add(i, sprites.get(name));
+
+            float x = random.nextFloat() * 50;
+            float y = camera.viewportHeight - 10;
+
+            Body body = createBody(name, x, y, 0);
+            body.setUserData(OBJECT_TYPE_FRUIT);
+
+            fruitBodies.add(i, body);
+        }
+
+        thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    while (!Thread.interrupted()) {
+                        Gdx.app.log("sdfsdf", "thread is working");
+
+                        if (fruitBodies.size() < 10 && !world.isLocked()) {
+                            Gdx.app.log("sdfsdf", "dsfsd");
+                            String name = fruitNames[random.nextInt(fruitNames.length)];
+
+                            fruitSprites.add(fruitSprites.size(), sprites.get(name));
+                            float x = random.nextFloat() * 50;
+                            float y = camera.viewportHeight;
+
+                            Body body = createBody(name, x, y, 0);
+                            body.setUserData(OBJECT_TYPE_FRUIT);
+
+                            fruitBodies.add(fruitBodies.size(), body);
+
+
+                        }
+                        Thread.sleep(200);
+                    }
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }
+        });
+
+        thread.start();
+    }
+
+    private Body createBody(String name, float x, float y, float rotation) {
+        Body body = physicsBodies.createBody(name, world, SCALE, SCALE);
+        body.setTransform(x, y, rotation);
+
+        return body;
+    }
+
+    /**
+     * This is called when the application is resized, and can happen at any
+     * time, but will never be called before {@link #create()}.
+     *
+     * @param width  The screen's new width in pixels.
+     * @param height The screen's new height in pixels.
+     */
+    @Override
+    public void resize(int width, int height) {
+        viewport.update(width, height, true);
+
+        generateFruit();
+
+
+        screenWidth = width;
+        screenHeight = height;
+
+        batch.setProjectionMatrix(camera.combined);
+
+        fireZone.setPosition(camera.viewportWidth - fireZone.radius * 2, 0);
+        fireZoneSprite.setPosition(fireZone.x, fireZone.y);
+
+        createGround();
+    }
+
+    private void createGround() {
+        if (ground != null) world.destroyBody(ground);
+
+        BodyDef bodyDef = new BodyDef();
+
+        bodyDef.type = BodyDef.BodyType.StaticBody;
+
+        FixtureDef fixtureDef = new FixtureDef();
+        fixtureDef.friction = 1;
+
+        PolygonShape bottom = new PolygonShape();
+        bottom.setAsBox(camera.viewportWidth, 1);
+
+        PolygonShape left = new PolygonShape();
+        left.setAsBox(1, camera.viewportHeight + 10);
+
+        Vector2[] rightEdge = new Vector2[]{new Vector2(camera.viewportWidth, 0),
+                new Vector2(camera.viewportWidth, camera.viewportHeight + 10),
+                new Vector2(camera.viewportWidth - 1, camera.viewportHeight + 10),
+                new Vector2(camera.viewportWidth - 1, 0)};
+        PolygonShape right = new PolygonShape();
+        right.set(rightEdge);
+
+
+        Vector2[] topEdge = new Vector2[]{new Vector2(0, camera.viewportHeight + 10),
+                new Vector2(camera.viewportWidth, camera.viewportHeight + 10),
+                new Vector2(0, camera.viewportHeight + 9),
+                new Vector2(camera.viewportWidth, camera.viewportHeight + 9)};
+        PolygonShape top = new PolygonShape();
+        top.set(topEdge);
+
+        fixtureDef.shape = bottom;
+
+        ground = world.createBody(bodyDef);
+        ground.createFixture(fixtureDef);
+//        ground.setTransform(0, 0, 0);
+
+        fixtureDef.shape = left;
+
+        ground = world.createBody(bodyDef);
+        ground.createFixture(fixtureDef);
+//        ground.setTransform(0, 0, 0);
+
+
+        fixtureDef.shape = right;
+
+        ground = world.createBody(bodyDef);
+        ground.createFixture(fixtureDef);
+//        ground.setTransform(0, 0, 0);
+
+        fixtureDef.shape = top;
+
+        ground = world.createBody(bodyDef);
+        ground.createFixture(fixtureDef);
+
+        bottom.dispose();
+        left.dispose();
+        right.dispose();
+    }
+
+    @Override
+    public void render() {
+        // Clear the screen using a sky-blue background.
+        Gdx.gl.glClearColor(0.57f, 0.77f, 0.85f, 1);
+        Gdx.gl.glClear(GL20.GL_COLOR_BUFFER_BIT);
+
+
+        // Step the physics world.
+        stepWorld();
+
+        if (Gdx.input.isKeyPressed(Input.Keys.LEFT)) {
+            Vector2 vector2 = ship.getPosition();
+
+            vector2.x -= 1;
+            ship.setTransform(vector2, 0);
+        }
+
+        if (Gdx.input.isKeyPressed(Input.Keys.RIGHT)) {
+            Vector2 vector2 = ship.getPosition();
+
+            vector2.x += 1;
+            ship.setTransform(vector2, 0);
+        }
+
+
+        if (Gdx.input.isKeyPressed(Input.Keys.UP)) {
+            Vector2 vector2 = ship.getPosition();
+
+            vector2.y += 1;
+            ship.setTransform(vector2, 0);
+        }
+
+        if (Gdx.input.isKeyPressed(Input.Keys.DOWN)) {
+            Vector2 vector2 = ship.getPosition();
+
+            vector2.y -= 1;
+            ship.setTransform(vector2, 0);
+        }
+
+        batch.begin();
+
+
+        drawSprite(sprites.get("cherries"), ship.getPosition().x, ship.getPosition().y, 0);
+        // iterate through each of the fruits
+        for (int i = 0; i < fruitBodies.size(); i++) {
+
+            Body body = fruitBodies.get(i);
+
+            Vector2 position = body.getPosition();
+
+            float degrees = (float) Math.toDegrees(body.getAngle());
+
+            drawSprite(fruitSprites.get(i), position.x, position.y, degrees);
+        }
+
+        for (int i = 0; i < bananaBullets.size(); i++) {
+            Body bullet = bananaBullets.get(i);
+
+            Vector2 p = bullet.getPosition();
+
+            if (p.y >= camera.viewportHeight) {
+                removeBullets(bullet);
+                i--;
+                continue;
+            }
+
+            float degrees = (float) Math.toDegrees(bullet.getAngle());
+            drawSprite(sprites.get("banana"), p.x, p.y, degrees);
+        }
+
+        fireZoneSprite.draw(batch);
+        batch.end();
+
+        for (Body item : objectsToRemove) {
+            world.destroyBody(item);
+        }
+        objectsToRemove.clear();
+
+    }
+
+    private void stepWorld() {
+        float delta = Gdx.graphics.getDeltaTime();
+
+        accumulator += Math.min(delta, 0.25f);
+
+        if (accumulator >= STEP_TIME) {
+            accumulator -= STEP_TIME;
+
+            world.step(STEP_TIME, VELOCITY_ITERATIONS, POSITION_ITERATIONS);
+        }
+    }
+
+    private void drawSprite(Sprite sprite, float x, float y, float degrees) {
+        sprite.setPosition(x, y);
+
+        sprite.setRotation(degrees);
+
+        sprite.draw(batch);
+    }
+
+    private void fireTrigger() {
+        if (!world.isLocked()) {
+            Vector2 pos = ship.getWorldCenter();
+            Body body = createBody("banana", pos.x, pos.y + 10, 0);
+            body.applyLinearImpulse(0, 1000, body.getWorldCenter().x, body.getWorldCenter().y, true);
+            body.setGravityScale(0);
+            body.setUserData(OBJECT_TYPE_BULLET);
+            bananaBullets.add(body);
+        }
+
+    }
+
+    @Override
+    public void dispose() {
+        textureAtlas.dispose();
+        sprites.clear();
+        if (thread != null && !thread.isInterrupted()) {
+            thread.interrupt();
+        }
+
+        world.dispose();
+    }
+
+    private void removeBullets(Body body) {
+        bananaBullets.remove(body);
+        body.setUserData(null);
+        objectsToRemove.add(body);
+    }
+
+    private void removeFruit(Body body) {
+        int pos = fruitBodies.indexOf(body);
+        if (pos >= 0) {
+
+            fruitBodies.remove(pos);
+            fruitSprites.remove(pos);
+            body.setUserData(null);
+            objectsToRemove.add(body);
+
+        }
+    }
+
+
 }
 
